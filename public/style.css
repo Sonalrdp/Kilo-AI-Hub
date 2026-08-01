@@ -92,6 +92,7 @@ body {
   background-color: var(--bg-deep);
   color: var(--text-primary);
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   display: flex;
   justify-content: center;
@@ -1306,6 +1307,10 @@ input[type="range"]::-webkit-slider-thumb:hover {
     font-size: 12.5px !important; /* Scale down all em/rem-based text on mobile proportionally */
   }
 
+  body {
+    height: 100dvh !important;
+  }
+
   .sidebar {
     position: fixed;
     top: 0;
@@ -1395,13 +1400,15 @@ input[type="range"]::-webkit-slider-thumb:hover {
   }
 
   .chat-input-container {
-    padding: 0.75rem 1rem env(safe-area-inset-bottom, 1rem) 1rem !important;
+    padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom, 0px)) 1rem !important;
   }
 
   .chat-header {
     padding-left: 1rem !important;
     padding-right: 1rem !important;
-    padding-top: calc(28px + env(safe-area-inset-top, 0px)) !important;
+    padding-top: calc(10px + env(safe-area-inset-top, 0px)) !important;
+    padding-bottom: 10px !important;
+    min-height: 52px !important;
   }
 }
 

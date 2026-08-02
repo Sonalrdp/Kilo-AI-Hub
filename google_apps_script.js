@@ -10,6 +10,55 @@ function doGet(e) {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
   
   var action = (e && e.parameter) ? e.parameter.action : null;
+  
+  if (action === "registerUser") {
+    var email = e.parameter.email;
+    var name = e.parameter.name;
+    var userType = e.parameter.userType;
+    var dailyLimit = Number(e.parameter.dailyLimit || 10000);
+    var plan = e.parameter.plan;
+    var price = Number(e.parameter.price || 0);
+    
+    if (!email) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Missing email" }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    try {
+      var emailKey = email.toLowerCase().trim();
+      var rows = sheet.getDataRange().getValues();
+      var foundRow = -1;
+      for (var r = 1; r < rows.length; r++) {
+        if (String(rows[r][1]).toLowerCase().trim() === emailKey) {
+          foundRow = r + 1; // 1-indexed
+          break;
+        }
+      }
+      
+      var parts = emailKey.split('@');
+      var loginId = parts[0];
+      if (!name) {
+        name = loginId.charAt(0).toUpperCase() + loginId.slice(1);
+      }
+      
+      if (foundRow > 0) {
+        sheet.getRange(foundRow, 3).setValue(name);
+        sheet.getRange(foundRow, 4).setValue(userType);
+        sheet.getRange(foundRow, 5).setValue(dailyLimit);
+        sheet.getRange(foundRow, 6).setValue(plan);
+        sheet.getRange(foundRow, 7).setValue(price);
+      } else {
+        sheet.appendRow([loginId, emailKey, name, userType, dailyLimit, plan, price]);
+      }
+      
+      return ContentService.createTextOutput(JSON.stringify({ success: true }))
+        .setMimeType(ContentService.MimeType.JSON);
+    } catch (regErr) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: regErr.message }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+
   if (action === "sendOtp") {
     var email = e.parameter.email;
     var otp = e.parameter.otp;
@@ -297,6 +346,54 @@ function doPost(e) {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
   var params = (e && e.parameter) ? e.parameter : {};
   var action = params.action;
+
+  if (action === "registerUser") {
+    var email = params.email;
+    var name = params.name;
+    var userType = params.userType;
+    var dailyLimit = Number(params.dailyLimit || 10000);
+    var plan = params.plan;
+    var price = Number(params.price || 0);
+    
+    if (!email) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: "Missing email" }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    try {
+      var emailKey = email.toLowerCase().trim();
+      var rows = sheet.getDataRange().getValues();
+      var foundRow = -1;
+      for (var r = 1; r < rows.length; r++) {
+        if (String(rows[r][1]).toLowerCase().trim() === emailKey) {
+          foundRow = r + 1;
+          break;
+        }
+      }
+      
+      var parts = emailKey.split('@');
+      var loginId = parts[0];
+      if (!name) {
+        name = loginId.charAt(0).toUpperCase() + loginId.slice(1);
+      }
+      
+      if (foundRow > 0) {
+        sheet.getRange(foundRow, 3).setValue(name);
+        sheet.getRange(foundRow, 4).setValue(userType);
+        sheet.getRange(foundRow, 5).setValue(dailyLimit);
+        sheet.getRange(foundRow, 6).setValue(plan);
+        sheet.getRange(foundRow, 7).setValue(price);
+      } else {
+        sheet.appendRow([loginId, emailKey, name, userType, dailyLimit, plan, price]);
+      }
+      
+      return ContentService.createTextOutput(JSON.stringify({ success: true }))
+        .setMimeType(ContentService.MimeType.JSON);
+    } catch (regErr) {
+      return ContentService.createTextOutput(JSON.stringify({ success: false, error: regErr.message }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+  }
 
   if (action === "getUsage") {
     var key = params.key;

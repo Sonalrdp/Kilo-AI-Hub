@@ -14,6 +14,10 @@
   <link rel="stylesheet" href="style.css?v=1.0.7">
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Google Identity Services client SDK -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <!-- Razorpay Standard Checkout SDK -->
+  <script src="https://checkout.razorpay.com/v1/checkout.js" defer></script>
 </head>
 <body>
   <!-- Login Screen Overlay (hidden by default) -->
@@ -36,21 +40,204 @@
       <form id="login-form">
         <!-- Step 1: Email Input -->
         <div class="form-group" id="login-email-group">
-          <label for="login-input">Gmail Address</label>
-          <input type="email" id="login-input" placeholder="yourname@gmail.com" required />
+          <label for="login-input">Email Address</label>
+          <input type="email" id="login-input" placeholder="yourname@example.com" required />
         </div>
         
         <!-- Step 2: OTP Input (Hidden by default) -->
         <div class="form-group hidden" id="login-otp-group">
           <label for="otp-input">Verification Code (OTP)</label>
           <input type="text" id="otp-input" placeholder="Enter 6-digit OTP" maxlength="6" pattern="\d{6}" />
-          <div class="otp-help-text" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.4rem;">An OTP has been sent to your Gmail address. Check your inbox/spam.</div>
+          <div class="otp-help-text" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.4rem;">An OTP has been sent to your email address. Check your inbox/spam.</div>
         </div>
         
         <button type="submit" class="btn primary-btn login-btn" id="login-submit-btn">
           <i data-lucide="log-in"></i> Sign In / Register
         </button>
+        
+        <!-- Google Sign-In Button Container -->
+        <div class="google-login-container" style="margin-top: 1rem; border-top: 1px solid var(--border-color); padding-top: 1rem; text-align: center;">
+          <div id="google-login-btn-container" style="display: flex; justify-content: center; width: 100%;"></div>
+          <div id="google-config-warning" class="text-muted hidden" style="font-size: 0.75rem; margin-top: 0.5rem; color: var(--accent-red);">
+            Please configure <code>GOOGLE_CLIENT_ID</code> in <code>.env</code> and restart the server to use official Google Sign-In.
+          </div>
+        </div>
       </form>
+
+      <!-- Registration Step: Select Plan / Tier (hidden by default) -->
+      <div id="registration-tier-container" class="hidden" style="width: 100%;">
+        <div class="registration-header" style="text-align: center; margin-bottom: 2rem;">
+          <h3 style="font-size: 1.75rem; font-family: var(--font-display); font-weight: 700; margin-bottom: 0.5rem;">Pick The Best Pricing Plan</h3>
+          <p style="font-size: 0.95rem; color: var(--text-secondary); max-width: 500px; margin: 0 auto;">Choose a tier to complete registration and activate your Kilo AI Client profile for <br><span id="registering-email-display" style="color: var(--accent-indigo); font-weight: 600;"></span></p>
+        </div>
+        
+        <div class="pricing-grid">
+          <!-- Card 1: Free Plan -->
+          <div class="pricing-card" data-tier="Free">
+            <div class="pricing-card-header">
+              <h4>Free Plan</h4>
+              <div class="pricing-card-price">
+                <span class="price-symbol">Rs</span>
+                <span class="price-amount">0</span>
+                <span class="price-period">/mo</span>
+              </div>
+              <p class="pricing-card-heading">Basic Gateway Access</p>
+            </div>
+            <div class="pricing-card-features">
+              <ul>
+                <li><i data-lucide="check"></i> 10,000 Daily Tokens</li>
+                <li><i data-lucide="check"></i> Kilo AI Free Models</li>
+                <li><i data-lucide="check"></i> Standard Chat Feed</li>
+                <li><i data-lucide="x" class="feature-disabled"></i> Premium Gemini Models</li>
+                <li><i data-lucide="x" class="feature-disabled"></i> Custom System Prompts</li>
+              </ul>
+            </div>
+            <button type="button" class="btn secondary-btn pricing-select-btn" data-tier="Free">Choose Plan</button>
+          </div>
+
+          <!-- Card 2: Premium Plan (Featured) -->
+          <div class="pricing-card featured" data-tier="Paid">
+            <div class="pricing-card-badge">RECOMMENDED</div>
+            <div class="pricing-card-header">
+              <h4>Premium Plan</h4>
+              <div class="pricing-card-price">
+                <span class="price-symbol">Rs</span>
+                <span class="price-amount">499</span>
+                <span class="price-period">/mo</span>
+              </div>
+              <p class="pricing-card-heading">Power User Features</p>
+            </div>
+            <div class="pricing-card-features">
+              <ul>
+                <li><i data-lucide="check"></i> 200,000 Daily Tokens</li>
+                <li><i data-lucide="check"></i> Premium Gemini Models</li>
+                <li><i data-lucide="check"></i> Custom System Prompts</li>
+                <li><i data-lucide="check"></i> Temperature Adjustments</li>
+                <li><i data-lucide="x" class="feature-disabled"></i> Unlimited Quotas</li>
+              </ul>
+            </div>
+            <button type="button" class="btn primary-btn pricing-select-btn" data-tier="Paid">Choose Plan</button>
+          </div>
+
+          <!-- Card 3: Half Year Plan -->
+          <div class="pricing-card" data-tier="HalfYear">
+            <div class="pricing-card-badge" style="background: linear-gradient(135deg, var(--accent-green), #10b981); box-shadow: 0 4px 10px rgba(16, 185, 129, 0.3);">10% OFF</div>
+            <div class="pricing-card-header">
+              <h4>Half Year Plan</h4>
+              <div class="pricing-card-price">
+                <span class="price-symbol">Rs</span>
+                <span class="price-amount">8,099</span>
+                <span class="price-period">/6mo</span>
+              </div>
+              <p class="pricing-card-heading">Medium Term Savings</p>
+            </div>
+            <div class="pricing-card-features">
+              <ul>
+                <li><i data-lucide="check"></i> 1,000,000 Daily Tokens</li>
+                <li><i data-lucide="check"></i> Premium Gemini Models</li>
+                <li><i data-lucide="check"></i> Temperature Adjustments</li>
+                <li><i data-lucide="check"></i> Custom System Prompts</li>
+                <li><i data-lucide="check"></i> High Priority Traffic</li>
+              </ul>
+            </div>
+            <button type="button" class="btn secondary-btn pricing-select-btn" data-tier="HalfYear">Choose Plan</button>
+          </div>
+
+          <!-- Card 4: Yearly Plan -->
+          <div class="pricing-card" data-tier="Yearly">
+            <div class="pricing-card-badge" style="background: linear-gradient(135deg, var(--accent-purple), var(--accent-pink)); box-shadow: 0 4px 10px rgba(168, 85, 247, 0.3);">15% OFF</div>
+            <div class="pricing-card-header">
+              <h4>Yearly Plan</h4>
+              <div class="pricing-card-price">
+                <span class="price-symbol">Rs</span>
+                <span class="price-amount">15,299</span>
+                <span class="price-period">/yr</span>
+              </div>
+              <p class="pricing-card-heading">Maximum Value Plan</p>
+            </div>
+            <div class="pricing-card-features">
+              <ul>
+                <li><i data-lucide="check"></i> 1,000,000 Daily Tokens</li>
+                <li><i data-lucide="check"></i> Premium Gemini Models</li>
+                <li><i data-lucide="check"></i> Temperature Adjustments</li>
+                <li><i data-lucide="check"></i> Custom System Prompts</li>
+                <li><i data-lucide="check"></i> High Priority Traffic</li>
+              </ul>
+            </div>
+            <button type="button" class="btn secondary-btn pricing-select-btn" data-tier="Yearly">Choose Plan</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Checkout Step: Simulated Payment (hidden by default) -->
+      <div id="checkout-container" class="hidden" style="width: 100%; max-width: 480px; margin: 0 auto;">
+        <div class="checkout-header" style="text-align: center; margin-bottom: 2rem;">
+          <h3 style="font-size: 1.5rem; font-family: var(--font-display); font-weight: 700; margin-bottom: 0.5rem;">Secure Checkout</h3>
+          <p style="font-size: 0.95rem; color: var(--text-secondary);">Activate <span id="checkout-plan-name" style="color: var(--accent-indigo); font-weight: 600;"></span> for <span id="checkout-plan-price" style="font-weight: 600; color: var(--text-primary);"></span></p>
+        </div>
+
+        <form id="checkout-form" style="display: flex; flex-direction: column; gap: 1.25rem;">
+          <!-- Payment Mode Selector Tabs -->
+          <div class="payment-tabs" style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem; width: 100%;">
+            <button type="button" class="btn" id="tab-card" style="flex: 1; padding: 0.6rem; background: rgba(99, 102, 241, 0.15); border: 1px solid var(--accent-indigo); border-radius: 8px; color: var(--text-primary); font-size: 0.85rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 0.4rem; transition: all 0.3s ease;">
+              <i data-lucide="credit-card" style="width: 14px; height: 14px;"></i> Card
+            </button>
+            <button type="button" class="btn" id="tab-upi" style="flex: 1; padding: 0.6rem; background: transparent; border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-muted); font-size: 0.85rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 0.4rem; transition: all 0.3s ease;">
+              <i data-lucide="qr-code" style="width: 14px; height: 14px;"></i> UPI QR
+            </button>
+          </div>
+
+          <!-- Card Payment Panel -->
+          <div id="card-payment-panel" style="display: flex; flex-direction: column; gap: 1.25rem; width: 100%;">
+            <div class="form-group">
+              <label for="card-name" style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Cardholder Name</label>
+              <input type="text" id="card-name" placeholder="John Doe" required style="background: var(--bg-input-select); border: 1px solid var(--border-color); color: var(--text-primary); padding: 0.75rem 1rem; border-radius: 10px;" />
+            </div>
+
+            <div class="form-group">
+              <label for="card-number" style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Card Number</label>
+              <div style="position: relative; display: flex; align-items: center; width: 100%;">
+                <input type="text" id="card-number" placeholder="4111 2222 3333 4444" maxlength="19" required style="padding-left: 2.75rem; background: var(--bg-input-select); border: 1px solid var(--border-color); color: var(--text-primary); padding-top: 0.75rem; padding-bottom: 0.75rem; border-radius: 10px; width: 100%;" />
+                <i data-lucide="credit-card" style="position: absolute; left: 1rem; color: var(--text-muted); width: 18px; height: 18px; pointer-events: none;"></i>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 1rem; width: 100%;">
+              <div class="form-group" style="flex: 1;">
+                <label for="card-expiry" style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Expiry Date</label>
+                <input type="text" id="card-expiry" placeholder="MM/YY" maxlength="5" required style="background: var(--bg-input-select); border: 1px solid var(--border-color); color: var(--text-primary); padding: 0.75rem 1rem; border-radius: 10px;" />
+              </div>
+              <div class="form-group" style="flex: 1;">
+                <label for="card-cvv" style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">CVV</label>
+                <input type="password" id="card-cvv" placeholder="123" maxlength="3" pattern="\d{3}" required style="background: var(--bg-input-select); border: 1px solid var(--border-color); color: var(--text-primary); padding: 0.75rem 1rem; border-radius: 10px;" />
+              </div>
+            </div>
+          </div>
+
+          <!-- UPI QR Code Payment Panel -->
+          <div id="upi-payment-panel" class="hidden" style="display: flex; flex-direction: column; align-items: center; gap: 1rem; text-align: center; width: 100%;">
+            <div style="background: white; padding: 0.75rem; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.15); width: 176px; height: 176px; display: flex; align-items: center; justify-content: center; margin: 0.5rem auto;">
+              <img id="upi-qr-image" src="" alt="UPI Payment QR Code" style="width: 160px; height: 160px;" />
+            </div>
+            <div style="font-size: 0.85rem; color: var(--text-secondary); max-width: 320px;">
+              <p>Scan using any UPI app (Paytm, Google Pay, PhonePe, BHIM, etc.)</p>
+              <div style="display: flex; align-items: center; justify-content: center; gap: 0.5rem; margin-top: 0.6rem; font-family: var(--font-mono); font-weight: 600; color: var(--accent-indigo);">
+                <i data-lucide="clock" style="width: 14px; height: 14px;"></i>
+                <span id="qr-expiry-timer">05:00</span>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top: 1.5rem; border-top: 1px solid var(--border-color); padding-top: 1.5rem; display: flex; gap: 1rem;">
+            <button type="button" class="btn secondary-btn" id="checkout-back-btn" style="flex: 1; justify-content: center; border-radius: 10px;">
+              Back
+            </button>
+            <button type="submit" class="btn primary-btn" id="checkout-pay-btn" style="flex: 2; justify-content: center; border-radius: 10px;">
+              <i data-lucide="shield-check"></i> Pay & Register
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   </div>
 
@@ -120,6 +307,11 @@
             <span id="quota-limit-display">/ 10,000</span>
           </div>
         </div>
+
+        <!-- Upgrade Button (Only shown for Free Tier users) -->
+        <button type="button" class="btn primary-btn upgrade-btn hidden" id="upgrade-tier-btn" style="width: 100%; margin-top: 1rem; padding: 0.5rem 1rem; font-size: 0.85rem; border-radius: 8px; justify-content: center;">
+          <i data-lucide="zap" style="width: 14px; height: 14px; fill: currentColor;"></i> Upgrade Plan
+        </button>
       </div>
 
       <!-- Footer Info -->

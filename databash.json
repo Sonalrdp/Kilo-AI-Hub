@@ -61,5 +61,23 @@
     "Daily Limit (Tokens)": 1000000,
     "Plan": "Yearly Unlimited",
     "Price (Rs)": 12999
+  },
+  {
+    "Login ID": "a",
+    "Email": "a@a.com",
+    "Name": "A",
+    "User Type": "Paid User",
+    "Daily Limit (Tokens)": 200000,
+    "Plan": "Monthly Premium",
+    "Price (Rs)": 499
+  },
+  {
+    "Login ID": "ankit",
+    "Email": "ankit@add.com",
+    "Name": "Ankit",
+    "User Type": "Paid User",
+    "Daily Limit (Tokens)": 200000,
+    "Plan": "Monthly Premium",
+    "Price (Rs)": 499
   }
 ]

@@ -35,7 +35,7 @@ function ensureDatabase() {
   }
 }
 
-function registerUserInLocalDb(email) {
+function registerUserInLocalDb(email, tier = "Free", name = null) {
   const dbPath = path.join(__dirname, 'databash.json');
   try {
     let users = [];
@@ -44,40 +44,95 @@ function registerUserInLocalDb(email) {
       users = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
     }
     
-    const parts = email.split('@');
+    const emailKey = email.toLowerCase().trim();
+    const parts = emailKey.split('@');
     const loginId = parts[0];
-    const name = loginId.charAt(0).toUpperCase() + loginId.slice(1);
+    const finalName = name || (loginId.charAt(0).toUpperCase() + loginId.slice(1));
     
-    const newUser = {
-      "Login ID": loginId,
-      "Email": email,
-      "Name": name,
-      "User Type": "Free",
-      "Daily Limit (Tokens)": 10000,
-      "Plan": "Free Plan",
-      "Price (Rs)": 0
-    };
+    let userType = "Free";
+    let dailyLimit = 10000;
+    let plan = "Free Plan";
+    let price = 0;
     
-    users.push(newUser);
+    const cleanTier = String(tier).trim().toLowerCase();
+    if (cleanTier === 'paid' || cleanTier === 'paid user' || cleanTier === 'paiduser') {
+      userType = "Paid User";
+      dailyLimit = 200000;
+      plan = "Monthly Premium";
+      price = 499;
+    } else if (cleanTier === 'unlimited' || cleanTier === 'paid user (unlimited)' || cleanTier === 'unlimited tier') {
+      userType = "Paid User (Unlimited)";
+      dailyLimit = 1000000;
+      plan = "Monthly Unlimited";
+      price = 1499;
+    } else if (cleanTier === 'halfyear' || cleanTier === 'half year' || cleanTier === 'half year plan') {
+      userType = "Paid User (Unlimited)";
+      dailyLimit = 1000000;
+      plan = "Half Year Unlimited";
+      price = 8099;
+    } else if (cleanTier === 'yearly' || cleanTier === 'yearly plan') {
+      userType = "Paid User (Unlimited)";
+      dailyLimit = 1000000;
+      plan = "Yearly Unlimited";
+      price = 15299;
+    }
+    
+    const idx = users.findIndex(u => String(u["Email"]).toLowerCase().trim() === emailKey);
+    if (idx >= 0) {
+      users[idx]["Name"] = finalName;
+      users[idx]["User Type"] = userType;
+      users[idx]["Daily Limit (Tokens)"] = dailyLimit;
+      users[idx]["Plan"] = plan;
+      users[idx]["Price (Rs)"] = price;
+    } else {
+      users.push({
+        "Login ID": loginId,
+        "Email": emailKey,
+        "Name": finalName,
+        "User Type": userType,
+        "Daily Limit (Tokens)": dailyLimit,
+        "Plan": plan,
+        "Price (Rs)": price
+      });
+    }
+    
     fs.writeFileSync(dbPath, JSON.stringify(users, null, 2), 'utf8');
-    console.log(`Registered new Gmail user in Local DB: ${email}`);
-    
+    console.log(`Registered/Updated user in Local DB: ${emailKey} with tier ${userType}`);
+
+    // Sync to Google Sheet Apps Script if configured
+    if (GOOGLE_SHEET_URL) {
+      const syncUrl = `${GOOGLE_SHEET_URL}?action=registerUser&email=${encodeURIComponent(emailKey)}&name=${encodeURIComponent(finalName)}&userType=${encodeURIComponent(userType)}&dailyLimit=${dailyLimit}&plan=${encodeURIComponent(plan)}&price=${price}`;
+      console.log('Syncing registration to Google Sheet Apps Script:', syncUrl);
+      fetch(syncUrl)
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            console.log('Successfully synced registration to Google Sheet.');
+          } else {
+            console.warn('Google Sheet registration sync failed:', data.error);
+          }
+        })
+        .catch(err => {
+          console.warn('Failed to contact Google Sheet for registration sync:', err.message);
+        });
+    }
+
     return {
-      loginId: newUser["Login ID"],
-      email: newUser["Email"],
-      name: newUser["Name"],
-      userType: newUser["User Type"],
-      dailyLimit: 10000,
-      plan: newUser["Plan"],
-      price: newUser["Price (Rs)"]
+      loginId: loginId,
+      email: emailKey,
+      name: finalName,
+      userType: userType,
+      dailyLimit: dailyLimit,
+      plan: plan,
+      price: price
     };
   } catch (err) {
-    console.error('Error auto-registering user in Local DB:', err);
+    console.error('Error auto-registering/updating user in Local DB:', err);
     return null;
   }
 }
 
-function getUserFromLocalDb(loginIdOrEmail) {
+function getUserFromLocalDb(loginIdOrEmail, tier = "Free", autoRegister = true) {
   const dbPath = path.join(__dirname, 'databash.json');
   if (!fs.existsSync(dbPath)) return null;
 
@@ -101,11 +156,11 @@ function getUserFromLocalDb(loginIdOrEmail) {
         plan: match["Plan"],
         price: match["Price (Rs)"]
       };
-    } else {
-      // If user not found but it is a valid Gmail address, auto-register in Local DB!
-      const gmailRegex = /^[a-zA-Z0-9._%+-]+@gmail\.com$/i;
-      if (gmailRegex.test(loginIdOrEmail)) {
-        return registerUserInLocalDb(loginIdOrEmail.toLowerCase().trim());
+    } else if (autoRegister) {
+      // If user not found but it is a valid email address, auto-register in Local DB!
+      const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/i;
+      if (emailRegex.test(loginIdOrEmail)) {
+        return registerUserInLocalDb(loginIdOrEmail.toLowerCase().trim(), tier);
       }
     }
   } catch (err) {
@@ -114,7 +169,7 @@ function getUserFromLocalDb(loginIdOrEmail) {
   return null;
 }
 
-async function getUserFromDatabase(loginIdOrEmail) {
+async function getUserFromDatabase(loginIdOrEmail, tier = "Free", autoRegister = true) {
   if (GOOGLE_SHEET_URL) {
     try {
       const fetchUrl = `${GOOGLE_SHEET_URL}?q=${encodeURIComponent(loginIdOrEmail)}`;
@@ -141,7 +196,7 @@ async function getUserFromDatabase(loginIdOrEmail) {
   }
 
   // Fallback to local JSON database
-  return getUserFromLocalDb(loginIdOrEmail);
+  return getUserFromLocalDb(loginIdOrEmail, tier, autoRegister);
 }
 
 async function getDailyUsage(loginId) {
@@ -224,6 +279,13 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
+// Endpoint to load public configuration
+app.get('/api/config', (req, res) => {
+  res.json({
+    googleClientId: process.env.GOOGLE_CLIENT_ID || ''
+  });
+});
+
 // Serve static frontend files from 'public' directory with cache-disabling headers
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders: (res, filePath) => {
@@ -233,10 +295,23 @@ app.use(express.static(path.join(__dirname, 'public'), {
   }
 }));
 
-// Endpoint to list models (calls Kilo AI Gateway keylessly)
+// Endpoint to list models (calls Kilo AI Gateway or Paid endpoint depending on user type)
 app.get('/api/models', async (req, res) => {
+  const { loginId } = req.query;
+  let isPaid = false;
+  if (loginId) {
+    const user = await getUserFromDatabase(loginId);
+    if (user && (user.userType === 'Paid User' || user.userType === 'Paid User (Unlimited)')) {
+      isPaid = true;
+    }
+  }
+
   try {
-    const response = await fetch('https://api.kilo.ai/api/gateway/models', {
+    const url = isPaid 
+      ? 'https://god-maog.onrender.com/openai/v1/models' 
+      : 'https://api.kilo.ai/api/gateway/models';
+
+    const response = await fetch(url, {
       method: 'GET',
       headers: {
         'Accept': 'application/json'
@@ -245,14 +320,14 @@ app.get('/api/models', async (req, res) => {
 
     if (!response.ok) {
       const errText = await response.text();
-      return res.status(response.status).json({ error: `Kilo AI API error: ${errText}` });
+      return res.status(response.status).json({ error: `API error: ${errText}` });
     }
 
     const data = await response.json();
     res.json(data);
   } catch (error) {
-    console.error('Error fetching Kilo models:', error);
-    res.status(500).json({ error: 'Failed to fetch models from Kilo AI: ' + error.message });
+    console.error('Error fetching models:', error);
+    res.status(500).json({ error: 'Failed to fetch models: ' + error.message });
   }
 });
 
@@ -282,6 +357,7 @@ app.post('/api/chat', async (req, res) => {
   let activeUserId = `guest_${req.ip.replace(/[^a-zA-Z0-9]/g, '')}`;
   let activeUserLimit = 10000;
   let isGuest = true;
+  let isPaid = false;
 
   if (loginId) {
     const user = await getUserFromDatabase(loginId);
@@ -289,6 +365,9 @@ app.post('/api/chat', async (req, res) => {
       activeUserId = user.loginId;
       activeUserLimit = user.dailyLimit;
       isGuest = false;
+      if (user.userType === 'Paid User' || user.userType === 'Paid User (Unlimited)') {
+        isPaid = true;
+      }
     }
   }
 
@@ -302,13 +381,21 @@ app.post('/api/chat', async (req, res) => {
   }
 
   try {
-    const response = await fetch('https://api.kilo.ai/api/gateway/chat/completions', {
+    const fetchUrl = isPaid 
+      ? 'https://god-maog.onrender.com/openai/v1/chat/completions' 
+      : 'https://api.kilo.ai/api/gateway/chat/completions';
+
+    const defaultModel = isPaid 
+      ? 'gemini-2.5-flash' 
+      : 'stepfun/step-3.7-flash:free';
+
+    const response = await fetch(fetchUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: model || 'stepfun/step-3.7-flash:free',
+        model: model || defaultModel,
         messages: sanitizeMessages(messages),
         stream: !!stream,
         temperature: temperature !== undefined ? temperature : 0.7,
@@ -318,7 +405,7 @@ app.post('/api/chat', async (req, res) => {
 
     if (!response.ok) {
       const errText = await response.text();
-      return res.status(response.status).json({ error: `Kilo AI API error: ${errText}` });
+      return res.status(response.status).json({ error: `API error: ${errText}` });
     }
 
     if (stream) {
@@ -397,18 +484,189 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-// Endpoint to handle User Login (Generates and dispatches OTP code for all valid Gmail addresses)
+// Endpoint to handle User Registration (with selected tier)
+app.post('/api/register', async (req, res) => {
+  try {
+    const { email, name, tier } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Email address is required.' });
+    }
+
+    const emailKey = email.toLowerCase().trim();
+    ensureDatabase();
+
+    // Create or update user registration (automatically syncs to Google Sheets)
+    let user = registerUserInLocalDb(emailKey, tier, name);
+
+    if (!user) {
+      return res.status(500).json({ error: 'Failed to complete registration.' });
+    }
+
+    const tokensUsed = await getDailyUsage(user.loginId);
+    res.json({
+      user,
+      stats: {
+        tokensUsed,
+        tokensLimit: user.dailyLimit
+      }
+    });
+  } catch (err) {
+    console.error('Error in /api/register:', err);
+    res.status(500).json({ error: 'Internal registration error: ' + err.message });
+  }
+});
+
+// Endpoint to create Razorpay Order or Sandbox Order
+app.post('/api/create-order', async (req, res) => {
+  try {
+    const { tier, email } = req.body;
+    if (!tier) {
+      return res.status(400).json({ error: 'Tier is required.' });
+    }
+
+    let price = 0;
+    const cleanTier = String(tier).trim().toLowerCase();
+    if (cleanTier === 'paid' || cleanTier === 'paid user' || cleanTier === 'paiduser') {
+      price = 499;
+    } else if (cleanTier === 'unlimited' || cleanTier === 'paid user (unlimited)' || cleanTier === 'unlimited tier') {
+      price = 1499;
+    } else if (cleanTier === 'halfyear' || cleanTier === 'half year' || cleanTier === 'half year plan') {
+      price = 8099;
+    } else if (cleanTier === 'yearly' || cleanTier === 'yearly plan') {
+      price = 15299;
+    }
+
+    const keyId = process.env.RAZORPAY_KEY_ID;
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+
+    if (keyId && keySecret) {
+      // Create order via Razorpay API using native fetch
+      const auth = Buffer.from(`${keyId}:${keySecret}`).toString('base64');
+      const response = await fetch('https://api.razorpay.com/v1/orders', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Basic ${auth}`
+        },
+        body: JSON.stringify({
+          amount: price * 100, // in paise
+          currency: 'INR',
+          receipt: `receipt_${Date.now()}`
+        })
+      });
+
+      const orderData = await response.json();
+      if (!response.ok) {
+        return res.status(response.status).json({ error: orderData.error?.description || 'Razorpay order creation failed.' });
+      }
+
+      return res.json({
+        isSandbox: false,
+        keyId,
+        orderId: orderData.id,
+        amount: orderData.amount,
+        currency: orderData.currency
+      });
+    } else {
+      // Fallback to Sandbox Simulator (no keys configured)
+      return res.json({
+        isSandbox: true,
+        amount: price * 100,
+        currency: 'INR'
+      });
+    }
+  } catch (err) {
+    console.error('Error in /api/create-order:', err);
+    res.status(500).json({ error: 'Order creation error: ' + err.message });
+  }
+});
+
+// Endpoint to verify Razorpay signatures and complete registrations
+app.post('/api/verify-payment', async (req, res) => {
+  try {
+    const { email, name, tier, razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
+    
+    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+      return res.status(400).json({ error: 'Payment details are incomplete.' });
+    }
+    
+    const crypto = require('crypto');
+    // Verify signature
+    const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
+    hmac.update(razorpay_order_id + "|" + razorpay_payment_id);
+    const generatedSignature = hmac.digest('hex');
+    
+    if (generatedSignature !== razorpay_signature) {
+      return res.status(400).json({ error: 'Payment signature verification failed. Untrusted payment.' });
+    }
+    
+    // Signature verified! Register or update the user (automatically syncs to Google Sheets)
+    const emailKey = email.toLowerCase().trim();
+    let user = registerUserInLocalDb(emailKey, tier, name);
+    
+    const tokensUsed = await getDailyUsage(user.loginId);
+    res.json({
+      user,
+      stats: {
+        tokensUsed,
+        tokensLimit: user.dailyLimit
+      }
+    });
+  } catch (err) {
+    console.error('Error in /api/verify-payment:', err);
+    res.status(500).json({ error: 'Payment verification error: ' + err.message });
+  }
+});
+
+// Endpoint to handle Google Login (Instant login, bypasses OTP verification)
+app.post('/api/google-login', async (req, res) => {
+  try {
+    const { email, name } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Email address is required.' });
+    }
+
+    const emailKey = email.toLowerCase().trim();
+    ensureDatabase();
+
+    let user = await getUserFromDatabase(emailKey, "Free", false);
+    if (user) {
+      // Existing user: log in directly
+      const tokensUsed = await getDailyUsage(user.loginId);
+      res.json({
+        user,
+        isNewUser: false,
+        stats: {
+          tokensUsed,
+          tokensLimit: user.dailyLimit
+        }
+      });
+    } else {
+      // New user: do NOT register yet. Return a flag.
+      res.json({
+        isNewUser: true,
+        email: emailKey,
+        name: name || ''
+      });
+    }
+  } catch (err) {
+    console.error('Error in /api/google-login:', err);
+    res.status(500).json({ error: 'Internal Google login error: ' + err.message });
+  }
+});
+
+// Endpoint to handle User Login (Generates and dispatches OTP code for all valid email addresses)
 app.post('/api/login', async (req, res) => {
   try {
     const { loginIdOrEmail } = req.body;
     if (!loginIdOrEmail) {
-      return res.status(400).json({ error: 'Gmail address is required.' });
+      return res.status(400).json({ error: 'Email address is required.' });
     }
 
-    // Enforce Gmail address format to send OTP
-    const gmailRegex = /^[a-zA-Z0-9._%+-]+@gmail\.com$/i;
-    if (!gmailRegex.test(loginIdOrEmail)) {
-      return res.status(400).json({ error: 'Please enter a valid Gmail address ending in @gmail.com' });
+    // Enforce email address format to send OTP
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/i;
+    if (!emailRegex.test(loginIdOrEmail)) {
+      return res.status(400).json({ error: 'Please enter a valid email address.' });
     }
 
     // Generate a 6-digit verification code
@@ -474,19 +732,28 @@ app.post('/api/verify-otp', async (req, res) => {
 
     // Auto-register user inside Excel/Google Sheet database and retrieve profile
     ensureDatabase();
-    const user = await getUserFromDatabase(emailKey);
-    if (!user) {
-      return res.status(500).json({ error: 'Registration failed. Could not create user record.' });
+    let user = await getUserFromDatabase(emailKey, "Free", false);
+    if (user) {
+      // Existing user: log in directly
+      const tokensUsed = await getDailyUsage(user.loginId);
+      res.json({
+        user,
+        isNewUser: false,
+        stats: {
+          tokensUsed,
+          tokensLimit: user.dailyLimit
+        }
+      });
+    } else {
+      // New user: do NOT register yet. Return a flag.
+      const parts = emailKey.split('@');
+      const name = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+      res.json({
+        isNewUser: true,
+        email: emailKey,
+        name: name
+      });
     }
-
-    const tokensUsed = await getDailyUsage(user.loginId);
-    res.json({
-      user,
-      stats: {
-        tokensUsed,
-        tokensLimit: user.dailyLimit
-      }
-    });
 
   } catch (verifyErr) {
     console.error('Error in /api/verify-otp:', verifyErr);

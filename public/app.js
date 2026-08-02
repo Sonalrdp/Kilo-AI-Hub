@@ -58,6 +58,10 @@ document.addEventListener('DOMContentLoaded', () => {
   let isGenerating = false;
   let currentUser = null;
   let isOtpPhase = false;
+  let registeringEmail = '';
+  let registeringName = '';
+  let selectedPlanTier = '';
+  let qrTimerInterval = null;
   let guestMessageCount = parseInt(localStorage.getItem('kilo_guest_count') || '0');
   let currentChatId = null;
   let chatHistory = JSON.parse(localStorage.getItem('kilo_chat_history') || '[]');
@@ -74,6 +78,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadSettings();
   checkServerConnection();
   adjustTextareaHeight();
+  initGoogleSignIn();
 
   // Restore User Session
   const savedUser = localStorage.getItem('kilo_user');
@@ -86,6 +91,16 @@ document.addEventListener('DOMContentLoaded', () => {
     logoutBtn.classList.remove('hidden');
     if (loginTriggerBtn) loginTriggerBtn.classList.add('hidden');
     
+    // Show/hide Upgrade button based on Free Tier status
+    const upgradeTierBtn = document.getElementById('upgrade-tier-btn');
+    if (upgradeTierBtn) {
+      if (currentUser.userType === 'Free') {
+        upgradeTierBtn.classList.remove('hidden');
+      } else {
+        upgradeTierBtn.classList.add('hidden');
+      }
+    }
+
     // Set profile avatar letter
     if (mobileProfileBtn && currentUser.name) {
       const letterSpan = mobileProfileBtn.querySelector('.avatar-letter');
@@ -134,8 +149,351 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // Bind Pricing Cards click listeners
+  const pricingGrid = document.querySelector('.pricing-grid');
+  if (pricingGrid) {
+    pricingGrid.addEventListener('click', async (e) => {
+      const selectBtn = e.target.closest('.pricing-select-btn');
+      if (!selectBtn) return;
+      
+      const selectedTier = selectBtn.getAttribute('data-tier');
+      if (!registeringEmail || !selectedTier) return;
+      
+      if (selectedTier === 'Free') {
+        // Register Free Plan instantly!
+        await executeRegistration(selectedTier, selectBtn);
+      } else {
+        // Call backend to create Razorpay/Sandbox Order
+        selectBtn.classList.add('loading');
+        selectBtn.disabled = true;
+        loginError.classList.add('hidden');
+        
+        try {
+          const response = await fetch('/api/create-order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              tier: selectedTier,
+              email: registeringEmail
+            })
+          });
+          
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.error || 'Failed to initialize payment.');
+          }
+          
+          selectedPlanTier = selectedTier;
+          
+          if (data.isSandbox) {
+            // Show standard glassmorphic sandbox Card Checkout form
+            let planName = 'Premium Plan';
+            let planPrice = 'Rs 499/mo';
+            let numericPrice = 499;
+            if (selectedTier === 'HalfYear') {
+              planName = 'Half Year Plan';
+              planPrice = 'Rs 8,099/6mo';
+              numericPrice = 8099;
+            } else if (selectedTier === 'Yearly') {
+              planName = 'Yearly Plan';
+              planPrice = 'Rs 15,299/yr';
+              numericPrice = 15299;
+            }
+            document.getElementById('checkout-plan-name').textContent = planName;
+            document.getElementById('checkout-plan-price').textContent = planPrice;
+            
+            // Generate UPI QR Code URL
+            const qrImageEl = document.getElementById('upi-qr-image');
+            if (qrImageEl) {
+              const upiPayload = `upi://pay?pa=kiloai@sandbox&pn=KiloAIChatHub&am=${numericPrice}&cu=INR`;
+              qrImageEl.src = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(upiPayload)}`;
+            }
+            
+            // Start Timer countdown (5 minutes)
+            startQrExpiryTimer();
+            
+            document.getElementById('registration-tier-container').classList.add('hidden');
+            document.getElementById('checkout-container').classList.remove('hidden');
+            document.getElementById('login-overlay').classList.remove('registration-phase');
+          } else {
+            // Open official Razorpay modal!
+            const options = {
+              key: data.keyId,
+              amount: data.amount,
+              currency: data.currency,
+              name: "Kilo AI Chat Hub",
+              description: selectedTier === 'Paid' ? 'Premium Plan Activation' : (selectedTier === 'HalfYear' ? 'Half Year Plan Activation' : 'Yearly Plan Activation'),
+              order_id: data.orderId,
+              handler: async function (paymentResponse) {
+                selectBtn.classList.add('loading');
+                try {
+                  const verifyRes = await fetch('/api/verify-payment', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      email: registeringEmail,
+                      name: registeringName,
+                      tier: selectedPlanTier,
+                      razorpay_payment_id: paymentResponse.razorpay_payment_id,
+                      razorpay_order_id: paymentResponse.razorpay_order_id,
+                      razorpay_signature: paymentResponse.razorpay_signature
+                    })
+                  });
+                  
+                  const verifyData = await verifyRes.json();
+                  if (!verifyRes.ok) {
+                    throw new Error(verifyData.error || 'Verification failed');
+                  }
+                  
+                  handleLoginSuccess(verifyData.user, verifyData.stats);
+                  resetLoginForm();
+                } catch (verifyErr) {
+                  loginError.textContent = "Payment verification failed: " + verifyErr.message;
+                  loginError.classList.remove('hidden');
+                } finally {
+                  selectBtn.classList.remove('loading');
+                }
+              },
+              prefill: {
+                name: registeringName,
+                email: registeringEmail
+              },
+              theme: {
+                color: "#6366f1"
+              }
+            };
+            const rzp = new Razorpay(options);
+            rzp.open();
+          }
+        } catch (err) {
+          loginError.textContent = err.message;
+          loginError.classList.remove('hidden');
+        } finally {
+          selectBtn.classList.remove('loading');
+          selectBtn.disabled = false;
+        }
+      }
+    });
+  }
+
+  // Helper function to register the user record in Local DB
+  async function executeRegistration(tier, actionButton) {
+    actionButton.classList.add('loading');
+    actionButton.disabled = true;
+    loginError.classList.add('hidden');
+    
+    try {
+      const response = await fetch('/api/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: registeringEmail,
+          name: registeringName,
+          tier: tier
+        })
+      });
+      
+      const responseText = await response.text();
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch (parseErr) {
+        throw new Error(`Server returned HTML error. Status: ${response.status}`);
+      }
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Registration failed');
+      }
+      
+      // Successfully registered and authenticated!
+      handleLoginSuccess(data.user, data.stats);
+      resetLoginForm();
+    } catch (err) {
+      loginError.textContent = err.message;
+      loginError.classList.remove('hidden');
+      throw err;
+    } finally {
+      actionButton.classList.remove('loading');
+      actionButton.disabled = false;
+    }
+  }
+
+  // Bind Checkout Back Button
+  const checkoutBackBtn = document.getElementById('checkout-back-btn');
+  if (checkoutBackBtn) {
+    checkoutBackBtn.addEventListener('click', () => {
+      document.getElementById('checkout-container').classList.add('hidden');
+      document.getElementById('registration-tier-container').classList.remove('hidden');
+      document.getElementById('login-overlay').classList.add('registration-phase'); // Expand modal to 3-column width
+    });
+  }
+
+  // Bind Checkout Form Submit
+  const checkoutForm = document.getElementById('checkout-form');
+  const checkoutPayBtn = document.getElementById('checkout-pay-btn');
+  if (checkoutForm) {
+    checkoutForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      if (!selectedPlanTier) return;
+      
+      checkoutPayBtn.classList.add('loading');
+      checkoutPayBtn.disabled = true;
+      loginError.classList.add('hidden');
+      
+      // Simulate payment network contact for 1.5 seconds
+      setTimeout(async () => {
+        try {
+          await executeRegistration(selectedPlanTier, checkoutPayBtn);
+        } catch (err) {
+          loginError.textContent = err.message;
+          loginError.classList.remove('hidden');
+        } finally {
+          checkoutPayBtn.classList.remove('loading');
+          checkoutPayBtn.disabled = false;
+        }
+      }, 1500);
+    });
+  }
+
+  // Auto-format card number
+  const cardNumberInput = document.getElementById('card-number');
+  if (cardNumberInput) {
+    cardNumberInput.addEventListener('input', (e) => {
+      let value = e.target.value.replace(/\s+/g, '').replace(/[^0-9]/gi, '');
+      let formatted = '';
+      for (let i = 0; i < value.length; i++) {
+        if (i > 0 && i % 4 === 0) formatted += ' ';
+        formatted += value[i];
+      }
+      e.target.value = formatted;
+    });
+  }
+
+  // Auto-format expiry date
+  const cardExpiryInput = document.getElementById('card-expiry');
+  if (cardExpiryInput) {
+    cardExpiryInput.addEventListener('input', (e) => {
+      let value = e.target.value.replace(/\s+/g, '').replace(/[^0-9]/gi, '');
+      if (value.length > 2) {
+        e.target.value = value.substring(0, 2) + '/' + value.substring(2, 4);
+      } else {
+        e.target.value = value;
+      }
+    });
+  }
+
+  // Bind Sandbox Checkout Payment Tabs
+  const tabCard = document.getElementById('tab-card');
+  const tabUpi = document.getElementById('tab-upi');
+  const cardPanel = document.getElementById('card-payment-panel');
+  const upiPanel = document.getElementById('upi-payment-panel');
+  
+  const cardFields = [
+    document.getElementById('card-name'),
+    document.getElementById('card-number'),
+    document.getElementById('card-expiry'),
+    document.getElementById('card-cvv')
+  ];
+
+  if (tabCard && tabUpi) {
+    tabCard.addEventListener('click', () => {
+      // Toggle Tabs active classes
+      tabCard.style.background = "rgba(99, 102, 241, 0.15)";
+      tabCard.style.borderColor = "var(--accent-indigo)";
+      tabCard.style.color = "var(--text-primary)";
+      
+      tabUpi.style.background = "transparent";
+      tabUpi.style.borderColor = "var(--border-color)";
+      tabUpi.style.color = "var(--text-muted)";
+      
+      // Toggle Panels
+      if (cardPanel) cardPanel.classList.remove('hidden');
+      if (upiPanel) upiPanel.classList.add('hidden');
+      
+      // Add Required tags
+      cardFields.forEach(f => { if (f) f.required = true; });
+    });
+
+    tabUpi.addEventListener('click', () => {
+      // Toggle Tabs active classes
+      tabUpi.style.background = "rgba(99, 102, 241, 0.15)";
+      tabUpi.style.borderColor = "var(--accent-indigo)";
+      tabUpi.style.color = "var(--text-primary)";
+      
+      tabCard.style.background = "transparent";
+      tabCard.style.borderColor = "var(--border-color)";
+      tabCard.style.color = "var(--text-muted)";
+      
+      // Toggle Panels
+      if (cardPanel) cardPanel.classList.add('hidden');
+      if (upiPanel) upiPanel.classList.remove('hidden');
+      
+      // Remove Required tags
+      cardFields.forEach(f => { if (f) f.required = false; });
+    });
+  }
+
+  // Timer countdown helper
+  function startQrExpiryTimer() {
+    if (qrTimerInterval) clearInterval(qrTimerInterval);
+    
+    let secondsLeft = 300; // 5 minutes
+    const timerDisplay = document.getElementById('qr-expiry-timer');
+    if (!timerDisplay) return;
+    
+    timerDisplay.textContent = "05:00";
+    timerDisplay.style.color = "var(--accent-indigo)";
+    
+    qrTimerInterval = setInterval(() => {
+      secondsLeft--;
+      if (secondsLeft <= 0) {
+        clearInterval(qrTimerInterval);
+        timerDisplay.textContent = "QR Code Expired";
+        timerDisplay.style.color = "var(--accent-red)";
+      } else {
+        const minutes = Math.floor(secondsLeft / 60);
+        const seconds = secondsLeft % 60;
+        const paddedSec = String(seconds).padStart(2, '0');
+        const paddedMin = String(minutes).padStart(2, '0');
+        timerDisplay.textContent = `${paddedMin}:${paddedSec}`;
+      }
+    }, 1000);
+  }
+
   // Bind Logout
   logoutBtn.addEventListener('click', logout);
+
+  // Bind Upgrade Button
+  const upgradeTierBtnEl = document.getElementById('upgrade-tier-btn');
+  if (upgradeTierBtnEl) {
+    upgradeTierBtnEl.addEventListener('click', () => {
+      if (!currentUser) return;
+      
+      // Save current user info to registration state
+      registeringEmail = currentUser.email;
+      registeringName = currentUser.name || '';
+      
+      // Show pricing overlay
+      const emailDisplay = document.getElementById('registering-email-display');
+      if (emailDisplay) emailDisplay.textContent = currentUser.email;
+      
+      const loginFormEl = document.getElementById('login-form');
+      const regContainer = document.getElementById('registration-tier-container');
+      const checkoutContainer = document.getElementById('checkout-container');
+      if (loginFormEl) loginFormEl.classList.add('hidden');
+      if (regContainer) regContainer.classList.remove('hidden');
+      if (checkoutContainer) checkoutContainer.classList.add('hidden');
+      
+      const overlay = document.getElementById('login-overlay');
+      if (overlay) {
+        overlay.classList.add('registration-phase');
+        overlay.classList.remove('hidden');
+      }
+      
+      lucide.createIcons();
+    });
+  }
 
   fetchModelsList(true); // silent initial load
 
@@ -417,16 +775,20 @@ document.addEventListener('DOMContentLoaded', () => {
   async function fetchModelsList(silent = false) {
     const refreshIcon = refreshModelsBtn ? refreshModelsBtn.querySelector('i, svg') : null;
     if (refreshIcon) refreshIcon.classList.add('animation-spin');
+
+    const isPaid = currentUser && (currentUser.userType === 'Paid User' || currentUser.userType === 'Paid User (Unlimited)');
+
     if (!silent) {
-      statusText.textContent = 'Syncing free models...';
+      statusText.textContent = isPaid ? 'Syncing premium models...' : 'Syncing free models...';
       serverStatus.className = 'connection-status connecting';
     }
 
     try {
       let response;
       let data;
+      const loginIdParam = currentUser ? '&loginId=' + encodeURIComponent(currentUser.loginId) : '';
       try {
-        response = await fetch('/api/models?t=' + Date.now());
+        response = await fetch('/api/models?t=' + Date.now() + loginIdParam);
         if (!response.ok) {
           const errData = await response.json();
           throw new Error(errData.error || 'Server error');
@@ -434,24 +796,32 @@ document.addEventListener('DOMContentLoaded', () => {
         data = await response.json();
       } catch (proxyErr) {
         console.warn('Local proxy models fetch failed, attempting direct gateway call...', proxyErr);
-        response = await fetch('https://api.kilo.ai/api/gateway/models?t=' + Date.now());
+        const directUrl = isPaid 
+          ? 'https://god-maog.onrender.com/openai/v1/models?t=' + Date.now() 
+          : 'https://api.kilo.ai/api/gateway/models?t=' + Date.now();
+        response = await fetch(directUrl);
         if (!response.ok) {
           throw new Error('Direct gateway call failed');
         }
         data = await response.json();
         serverStatus.className = 'connection-status connected';
-        statusText.textContent = 'Connected (Direct Gateway)';
+        statusText.textContent = isPaid ? 'Connected (Direct Paid Gateway)' : 'Connected (Direct Gateway)';
       }
 
       if (data && data.data && Array.isArray(data.data)) {
         const currentSelected = localStorage.getItem('kilo_selectedModel') || modelSelect.value;
         modelSelect.innerHTML = '';
 
-        // Filter to only include free models in Kilo AI (by isFree property or ID pattern)
-        const filteredModels = data.data.filter(modelObj => {
-          const modelId = String(modelObj.id || "").toLowerCase();
-          return modelObj.isFree === true || modelId.includes(':free') || modelId.endsWith('/free') || modelId.endsWith('-free');
-        });
+        let filteredModels;
+        if (isPaid) {
+          filteredModels = data.data; // Show all models returned by god-maog
+        } else {
+          // Filter to only include free models in Kilo AI (by isFree property or ID pattern)
+          filteredModels = data.data.filter(modelObj => {
+            const modelId = String(modelObj.id || "").toLowerCase();
+            return modelObj.isFree === true || modelId.includes(':free') || modelId.endsWith('/free') || modelId.endsWith('-free');
+          });
+        }
 
         filteredModels.forEach(modelObj => {
           const opt = document.createElement('option');
@@ -468,12 +838,12 @@ document.addEventListener('DOMContentLoaded', () => {
           saveSetting('selectedModel', modelSelect.value);
           if (activeModelBadge) activeModelBadge.textContent = modelSelect.value;
         } else if (!silent) {
-          alert('No free models available from Kilo AI. Please try again later.');
+          alert(isPaid ? 'No paid models available from endpoint.' : 'No free models available from Kilo AI. Please try again later.');
         }
 
         if (!silent) {
           serverStatus.className = 'connection-status connected';
-          statusText.textContent = 'Free models synchronized';
+          statusText.textContent = isPaid ? 'Premium models synchronized' : 'Free models synchronized';
         }
 
         // Sync custom dropdown with newly fetched models
@@ -564,6 +934,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ...chatMessages
       ]);
 
+      const isPaid = currentUser && (currentUser.userType === 'Paid User' || currentUser.userType === 'Paid User (Unlimited)');
       const requestBody = {
         model: modelSelect.value,
         messages: sanitizedMessages,
@@ -589,7 +960,10 @@ document.addEventListener('DOMContentLoaded', () => {
           throw proxyErr;
         }
         console.warn('Local proxy chat failed, attempting direct gateway call...', proxyErr);
-        response = await fetch('https://api.kilo.ai/api/gateway/chat/completions', {
+        const directChatUrl = isPaid 
+          ? 'https://god-maog.onrender.com/openai/v1/chat/completions' 
+          : 'https://api.kilo.ai/api/gateway/chat/completions';
+        response = await fetch(directChatUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(requestBody),
@@ -1146,6 +1520,16 @@ document.addEventListener('DOMContentLoaded', () => {
     userNameDisplay.textContent = user.name;
     userTierDisplay.textContent = user.userType;
     updateQuotaUI(stats.tokensUsed, stats.tokensLimit);
+
+    // Show/hide Upgrade button based on Free Tier status
+    const upgradeTierBtn = document.getElementById('upgrade-tier-btn');
+    if (upgradeTierBtn) {
+      if (user.userType === 'Free') {
+        upgradeTierBtn.classList.remove('hidden');
+      } else {
+        upgradeTierBtn.classList.add('hidden');
+      }
+    }
     
     // Set profile avatar letter
     if (mobileProfileBtn && user.name) {
@@ -1164,10 +1548,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Load chat history from Google Sheets
     loadHistoryFromServer();
+
+    // Refresh model list for the signed-in user
+    fetchModelsList(true);
   }
 
   function resetLoginForm() {
     isOtpPhase = false;
+    registeringEmail = '';
+    registeringName = '';
+    selectedPlanTier = '';
     loginInput.value = '';
     if (otpInput) {
       otpInput.value = '';
@@ -1181,15 +1571,43 @@ document.addEventListener('DOMContentLoaded', () => {
       lucide.createIcons();
     }
     loginError.classList.add('hidden');
+
+    if (qrTimerInterval) {
+      clearInterval(qrTimerInterval);
+      qrTimerInterval = null;
+    }
+
+    // Reset tabs selection
+    const tabCard = document.getElementById('tab-card');
+    if (tabCard) tabCard.click();
+
+    // Reset registration step display
+    const regContainer = document.getElementById('registration-tier-container');
+    const loginFormEl = document.getElementById('login-form');
+    const checkoutContainer = document.getElementById('checkout-container');
+    if (regContainer) regContainer.classList.add('hidden');
+    if (loginFormEl) loginFormEl.classList.remove('hidden');
+    if (checkoutContainer) checkoutContainer.classList.add('hidden');
+    document.getElementById('login-overlay').classList.remove('registration-phase');
+
+    // Clear checkout inputs
+    const cardName = document.getElementById('card-name');
+    const cardNumber = document.getElementById('card-number');
+    const cardExpiry = document.getElementById('card-expiry');
+    const cardCvv = document.getElementById('card-cvv');
+    if (cardName) cardName.value = '';
+    if (cardNumber) cardNumber.value = '';
+    if (cardExpiry) cardExpiry.value = '';
+    if (cardCvv) cardCvv.value = '';
   }
 
   async function attemptLogin(loginIdOrEmail) {
     loginError.classList.add('hidden');
     
-    // Enforce genuine Gmail addresses ending in @gmail.com
-    const gmailRegex = /^[a-zA-Z0-9._%+-]+@gmail\.com$/i;
-    if (!gmailRegex.test(loginIdOrEmail)) {
-      loginError.textContent = "Please enter a valid Gmail address ending in @gmail.com";
+    // Enforce valid email addresses
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/i;
+    if (!emailRegex.test(loginIdOrEmail)) {
+      loginError.textContent = "Please enter a valid email address.";
       loginError.classList.remove('hidden');
       return;
     }
@@ -1237,6 +1655,143 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  async function handleGoogleLogin(email, name) {
+    loginError.classList.add('hidden');
+    if (loginSubmitBtn) loginSubmitBtn.classList.add('loading');
+
+    try {
+      const response = await fetch('/api/google-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, name })
+      });
+      
+      const responseText = await response.text();
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch (parseErr) {
+        throw new Error(`Server returned HTML error. Status: ${response.status}`);
+      }
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Google login failed');
+      }
+      
+      if (data.isNewUser) {
+        // Show plan selection screen
+        registeringEmail = data.email;
+        registeringName = data.name || '';
+        document.getElementById('registering-email-display').textContent = data.email;
+        document.getElementById('login-form').classList.add('hidden');
+        document.getElementById('registration-tier-container').classList.remove('hidden');
+        document.getElementById('login-overlay').classList.add('registration-phase');
+        lucide.createIcons();
+      } else {
+        // Successfully authenticated!
+        handleLoginSuccess(data.user, data.stats);
+        resetLoginForm();
+      }
+    } catch (err) {
+      loginError.textContent = err.message;
+      loginError.classList.remove('hidden');
+      loginOverlay.classList.remove('hidden');
+    } finally {
+      if (loginSubmitBtn) loginSubmitBtn.classList.remove('loading');
+    }
+  }
+
+  async function initGoogleSignIn() {
+    try {
+      const res = await fetch('/api/config');
+      if (!res.ok) throw new Error('Failed to load config');
+      const config = await res.json();
+      
+      const btnContainer = document.getElementById('google-login-btn-container');
+      const warningEl = document.getElementById('google-config-warning');
+      
+      if (!config.googleClientId) {
+        if (warningEl) warningEl.classList.remove('hidden');
+        if (btnContainer) {
+          btnContainer.innerHTML = `
+            <button type="button" class="google-btn" style="opacity: 0.6; cursor: not-allowed;" disabled>
+              <svg class="google-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="width:18px;height:18px;margin-right:8px;vertical-align:middle;">
+                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" fill="#FBBC05"/>
+                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.53 12-4.53z" fill="#EA4335"/>
+              </svg>
+              Google Sign-In Unconfigured
+            </button>
+          `;
+        }
+        return;
+      }
+      
+      if (warningEl) warningEl.classList.add('hidden');
+      
+      const checkGoogleLib = setInterval(() => {
+        if (window.google && window.google.accounts && window.google.accounts.id) {
+          clearInterval(checkGoogleLib);
+          
+          window.google.accounts.id.initialize({
+            client_id: config.googleClientId,
+            callback: window.handleGoogleCredentialResponse,
+            context: 'signin',
+            ux_mode: 'popup'
+          });
+          
+          window.google.accounts.id.renderButton(
+            btnContainer,
+            { 
+              type: 'standard',
+              theme: 'outline', 
+              size: 'large', 
+              text: 'signin_with',
+              shape: 'rectangular',
+              width: btnContainer.clientWidth || 300
+            }
+          );
+        }
+      }, 100);
+    } catch (e) {
+      console.error('Failed to initialize official Google Sign-In:', e);
+    }
+  }
+
+  window.handleGoogleCredentialResponse = async function(response) {
+    if (!response || !response.credential) {
+      loginError.textContent = "Google authentication failed. Please try again.";
+      loginError.classList.remove('hidden');
+      return;
+    }
+    
+    try {
+      const token = response.credential;
+      const payload = decodeJwt(token);
+      const email = payload.email;
+      const name = payload.name || payload.given_name || email.split('@')[0];
+      
+      await handleGoogleLogin(email, name);
+    } catch (err) {
+      loginError.textContent = "Failed to parse Google account credentials: " + err.message;
+      loginError.classList.remove('hidden');
+    }
+  };
+
+  function decodeJwt(token) {
+    try {
+      const base64Url = token.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+      }).join(''));
+      return JSON.parse(jsonPayload);
+    } catch (e) {
+      throw new Error("Invalid JWT token structure");
+    }
+  }
+
   async function verifyOtp(email, otp) {
     loginError.classList.add('hidden');
     
@@ -1267,9 +1822,20 @@ document.addEventListener('DOMContentLoaded', () => {
         throw new Error(data.error || 'Verification failed');
       }
       
-      // Successfully verified & registered!
-      handleLoginSuccess(data.user, data.stats);
-      resetLoginForm();
+      if (data.isNewUser) {
+        // Show plan selection screen
+        registeringEmail = data.email;
+        registeringName = data.name || '';
+        document.getElementById('registering-email-display').textContent = data.email;
+        document.getElementById('login-form').classList.add('hidden');
+        document.getElementById('registration-tier-container').classList.remove('hidden');
+        document.getElementById('login-overlay').classList.add('registration-phase');
+        lucide.createIcons();
+      } else {
+        // Successfully verified & registered!
+        handleLoginSuccess(data.user, data.stats);
+        resetLoginForm();
+      }
     } catch (err) {
       loginError.textContent = err.message;
       loginError.classList.remove('hidden');
@@ -1281,19 +1847,9 @@ document.addEventListener('DOMContentLoaded', () => {
   function logout() {
     currentUser = null;
     localStorage.removeItem('kilo_user');
-    
-    userCard.classList.add('hidden');
-    logoutBtn.classList.add('hidden');
-    loginOverlay.classList.add('hidden');
-    if (loginTriggerBtn) loginTriggerBtn.classList.remove('hidden');
-    
-    if (mobileProfileBtn) {
-      const letterSpan = mobileProfileBtn.querySelector('.avatar-letter');
-      if (letterSpan) letterSpan.textContent = 'G'; // Reset to Guest
-    }
-    
-    resetLoginForm();
-    persistLocalHistory();
+    localStorage.removeItem('kilo_chat_history');
+    localStorage.removeItem('kilo_guest_count');
+    window.location.reload();
   }
 
   // ===== Chat History Management =====
